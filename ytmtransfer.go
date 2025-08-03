@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"runtime"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -97,6 +99,7 @@ func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 	config.RedirectURL = server.URL
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
 	fmt.Printf("Opening browser for authorization: %v\n", authURL)
+	openBrowser(authURL)
 
 	// Wait for code
 	authCode := <-codeCh
@@ -239,4 +242,20 @@ func isServerError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// Helper to open browser automatically
+func openBrowser(url string) {
+	var err error
+	switch runtime.GOOS {
+	case "linux":
+		err = exec.Command("xdg-open", url).Start()
+	case "windows":
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		err = exec.Command("open", url).Start()
+	}
+	if err != nil {
+		fmt.Printf("Please open manually: %v\n", url)
+	}
 }
