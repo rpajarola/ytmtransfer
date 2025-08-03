@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -125,13 +126,12 @@ func saveToken(path string, token *oauth2.Token) {
 	json.NewEncoder(f).Encode(token)
 }
 
-func transferLikes(source, target *youtube.Service) error {
+func getLikedVideos(s *youtube.Service) ([]string, error) {
 	pageToken := ""
 	likedVideos := []string{}
-
 	// Fetch all liked videos from source account
 	for {
-		call := source.Videos.List([]string{"id"}).
+		call := s.Videos.List([]string{"id"}).
 			MyRating("like").
 			MaxResults(50)
 
@@ -141,7 +141,7 @@ func transferLikes(source, target *youtube.Service) error {
 
 		response, err := call.Do()
 		if err != nil {
-			return fmt.Errorf("error fetching liked videos: %v", err)
+			return nil, fmt.Errorf("error fetching liked videos: %v", err)
 		}
 
 		for _, item := range response.Items {
@@ -155,22 +155,55 @@ func transferLikes(source, target *youtube.Service) error {
 	}
 
 	fmt.Printf("Found %d liked videos\n", len(likedVideos))
+	return likedVideos, nil
+}
 
-	waitTime := 5
+type stringSet map[string]struct{}
+
+func newStringSet(strings ...string) stringSet {
+	set := make(map[string]struct{}, len(strings))
+	for _, str := range strings {
+		set[str] = struct{}{}
+	}
+	return set
+}
+
+func (s stringSet) Contains(str string) bool {
+	_, ok := s[str]
+	return ok
+}
+
+
+func transferLikes(source, target *youtube.Service) error {
+	likedVideos, err := getLikedVideos(source)
+	if err != nil {
+		return err
+	}
+	transferredLikes, err := getLikedVideos(target)
+	if err != nil {
+		return err
+	}
+	alreadyTransferred := newStringSet(transferredLikes...)
+
+	waitTime := 5 * time.Second
 	// Like videos on target account
 	for i, videoId := range likedVideos {
+		if alreadyTransferred.Contains(videoId) {
+			log.Printf("skipping %v (already liked)", videoId)
+			continue
+		}
 		err := target.Videos.Rate(videoId, "like").Do()
 		switch {
 		case isQuotaError(err):
 			return err
 		case isRateLimitedError(err):
 			log.Printf("Rate limited, retrying in %vs", waitTime)
-			time.Sleep(waitTime)
-			waitTime += 5
+			time.Sleep(waitTime * time.Second)
+			waitTime += 5 * time.Second
 		case isServerError(err):
 			log.Printf("Server error, retrying in %vs...", waitTime)
-			time.Sleep(waitTime)
-			waitTime += 5
+			time.Sleep(waitTime * time.Second)
+			waitTime += 5 * time.Second
 		case err != nil:
 			log.Printf("Error liking video %s: %v", videoId, err)
 			continue
