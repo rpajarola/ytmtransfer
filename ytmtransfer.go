@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"time"
 
@@ -79,19 +80,21 @@ func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 	codeCh := make(chan string)
 
 	// Start local server
-	server := &http.Server{Addr: ":8080"}
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
 		if code != "" {
 			fmt.Fprintf(w, "Authorization successful! You can close this window.")
 			codeCh <- code
 		}
 	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
 
-	go server.ListenAndServe()
-	defer server.Shutdown(context.Background())
+	//	go server.ListenAndServe()
+	//	defer server.Shutdown(context.Background())
 
-	config.RedirectURL = "http://localhost:8080"
+	config.RedirectURL = server.URL
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
 	fmt.Printf("Opening browser for authorization: %v\n", authURL)
 
@@ -172,7 +175,6 @@ func (s stringSet) Contains(str string) bool {
 	_, ok := s[str]
 	return ok
 }
-
 
 func transferLikes(source, target *youtube.Service) error {
 	likedVideos, err := getLikedVideos(source)
