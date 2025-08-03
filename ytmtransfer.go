@@ -156,15 +156,23 @@ func transferLikes(source, target *youtube.Service) error {
 
 	fmt.Printf("Found %d liked videos\n", len(likedVideos))
 
+	waitTime := 5
 	// Like videos on target account
 	for i, videoId := range likedVideos {
 		err := target.Videos.Rate(videoId, "like").Do()
-		if isQuotaError(err) {
+		switch {
+		case isQuotaError(err):
 			return err
-		}
-		if err != nil {
-
-			fmt.Printf("Error liking video %s: %v\n", videoId, err)
+		case isRateLimitedError(err):
+			log.Printf("Rate limited, retrying in %vs", waitTime)
+			time.Sleep(waitTime)
+			waitTime += 5
+		case isServerError(err):
+			log.Printf("Server error, retrying in %vs...", waitTime)
+			time.Sleep(waitTime)
+			waitTime += 5
+		case err != nil:
+			log.Printf("Error liking video %s: %v", videoId, err)
 			continue
 		}
 		log.Printf("Liked video %d/%d: %s\n", i+1, len(likedVideos), videoId)
@@ -180,6 +188,20 @@ func isQuotaError(err error) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func isRateLimitedError(err error) bool {
+	if apiErr, ok := err.(*googleapi.Error); ok && apiErr.Code == 429 {
+		return true
+	}
+	return false
+}
+
+func isServerError(err error) bool {
+	if apiErr, ok := err.(*googleapi.Error); ok && apiErr.Code >= 500 {
+		return true
 	}
 	return false
 }
