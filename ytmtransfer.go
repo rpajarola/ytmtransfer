@@ -60,7 +60,7 @@ func main() {
 
 	// Transfer likes
 	if err := transferLikes(sourceService, targetService); err != nil {
-	log.Fatalf("Error transferring likes: %v", err)
+		log.Fatalf("Error transferring likes: %v", err)
 	}
 }
 
@@ -74,18 +74,31 @@ func getClient(config *oauth2.Config, tokFile string) *http.Client {
 }
 
 func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
-	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
-	fmt.Printf("Go to the following link in your browser then type the "+
-		"authorization code: \n%v\n", authURL)
+	codeCh := make(chan string)
 
-	var authCode string
-	if _, err := fmt.Scan(&authCode); err != nil {
-		log.Fatalf("Unable to read authorization code: %v", err)
-	}
+	// Start local server
+	server := &http.Server{Addr: ":8080"}
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		if code != "" {
+			fmt.Fprintf(w, "Authorization successful! You can close this window.")
+			codeCh <- code
+		}
+	})
+
+	go server.ListenAndServe()
+	defer server.Shutdown(context.Background())
+
+	config.RedirectURL = "http://localhost:8080"
+	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+	fmt.Printf("Opening browser for authorization: %v\n", authURL)
+
+	// Wait for code
+	authCode := <-codeCh
 
 	tok, err := config.Exchange(context.TODO(), authCode)
 	if err != nil {
-		log.Fatalf("Unable to retrieve token from web: %v", err)
+		log.Fatalf("Unable to retrieve token: %v", err)
 	}
 	return tok
 }
@@ -149,7 +162,7 @@ func transferLikes(source, target *youtube.Service) error {
 			fmt.Printf("Error liking video %s: %v\n", videoId, err)
 			continue
 		}
-		fmt.Printf("Liked video %d/%d: %s\n", i+1, len(likedVideos), videoId)
+		log.Printf("Liked video %d/%d: %s\n", i+1, len(likedVideos), videoId)
 	}
 
 	return nil
