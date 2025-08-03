@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
 )
@@ -158,7 +159,11 @@ func transferLikes(source, target *youtube.Service) error {
 	// Like videos on target account
 	for i, videoId := range likedVideos {
 		err := target.Videos.Rate(videoId, "like").Do()
+		if isQuotaError(err) {
+			return err
+		}
 		if err != nil {
+
 			fmt.Printf("Error liking video %s: %v\n", videoId, err)
 			continue
 		}
@@ -166,4 +171,15 @@ func transferLikes(source, target *youtube.Service) error {
 	}
 
 	return nil
+}
+
+func isQuotaError(err error) bool {
+	if apiErr, ok := err.(*googleapi.Error); ok {
+		for _, e := range apiErr.Errors {
+			if e.Reason == "quotaExceeded" {
+				return true
+			}
+		}
+	}
+	return false
 }
