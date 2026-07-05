@@ -191,8 +191,9 @@ func transferLikes(source, target *youtube.Service) error {
 	alreadyTransferred := newStringSet(transferredLikes...)
 
 	waitTime := 5 * time.Second
-	// Like videos on target account
-	for i, videoId := range likedVideos {
+	// Like videos in reverse order so the target ends up with the same order as source
+	for i := len(likedVideos) - 1; i >= 0; i-- {
+		videoId := likedVideos[i]
 		if alreadyTransferred.Contains(videoId) {
 			log.Printf("skipping %v (already liked)", videoId)
 			continue
@@ -213,7 +214,7 @@ func transferLikes(source, target *youtube.Service) error {
 			log.Printf("Error liking video %s: %v", videoId, err)
 			continue
 		}
-		log.Printf("Liked video %d/%d: %s\n", i+1, len(likedVideos), videoId)
+		log.Printf("Liked video %d/%d: %s\n", len(likedVideos)-i, len(likedVideos), videoId)
 	}
 
 	return nil
