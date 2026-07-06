@@ -146,37 +146,6 @@ func saveToken(path string, token *oauth2.Token) {
 	json.NewEncoder(f).Encode(token)
 }
 
-func getLikedVideos(s *youtube.Service) ([]string, error) {
-	pageToken := ""
-	likedVideos := []string{}
-	// Fetch all liked videos from source account
-	for {
-		call := s.Videos.List([]string{"id"}).
-			MyRating("like").
-			MaxResults(50)
-
-		if pageToken != "" {
-			call = call.PageToken(pageToken)
-		}
-
-		response, err := call.Do()
-		if err != nil {
-			return nil, fmt.Errorf("error fetching liked videos: %v", err)
-		}
-
-		for _, item := range response.Items {
-			likedVideos = append(likedVideos, item.Id)
-		}
-
-		pageToken = response.NextPageToken
-		if pageToken == "" {
-			break
-		}
-	}
-
-	fmt.Printf("Found %d liked videos\n", len(likedVideos))
-	return likedVideos, nil
-}
 
 type stringSet map[string]struct{}
 
@@ -194,20 +163,24 @@ func (s stringSet) Contains(str string) bool {
 }
 
 func transferLikes(source, target *youtube.Service) error {
-	likedVideos, err := getLikedVideos(source)
+	likedItems, err := getLikedMusicItems(source)
 	if err != nil {
 		return err
 	}
-	transferredLikes, err := getLikedVideos(target)
+	transferredItems, err := getLikedMusicItems(target)
 	if err != nil {
 		return err
 	}
-	alreadyTransferred := newStringSet(transferredLikes...)
+	transferredIDs := make([]string, len(transferredItems))
+	for i, item := range transferredItems {
+		transferredIDs[i] = item.VideoID
+	}
+	alreadyTransferred := newStringSet(transferredIDs...)
 
 	waitTime := 5 * time.Second
 	// Like videos in reverse order so the target ends up with the same order as source
-	for i := len(likedVideos) - 1; i >= 0; i-- {
-		videoId := likedVideos[i]
+	for i := len(likedItems) - 1; i >= 0; i-- {
+		videoId := likedItems[i].VideoID
 		if alreadyTransferred.Contains(videoId) {
 			log.Printf("skipping %v (already liked)", videoId)
 			continue
@@ -228,7 +201,7 @@ func transferLikes(source, target *youtube.Service) error {
 			log.Printf("Error liking video %s: %v", videoId, err)
 			continue
 		}
-		log.Printf("Liked video %d/%d: %s\n", len(likedVideos)-i, len(likedVideos), videoId)
+		log.Printf("Liked video %d/%d: %s\n", len(likedItems)-i, len(likedItems), videoId)
 	}
 
 	return nil
