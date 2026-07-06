@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -26,13 +27,20 @@ type Config struct {
 }
 
 var (
-	enableTransferLikes          bool = false
+	enableTransferLikes          bool = true
 	enableCreateMonthlyPlaylists bool = true
+	dryRun                       bool = false
 )
 
 func main() {
+	flag.BoolVar(&dryRun, "n", false, "dry-run: show what would be done without making any changes")
+	flag.Parse()
+
 	ctx := context.Background()
 
+	if dryRun {
+		log.Print("DRY-RUN mode enabled — no changes will be made")
+	}
 	log.Print("Reading credentials from credentials.json")
 	// Load client credentials
 	b, err := os.ReadFile("credentials.json")
@@ -183,6 +191,10 @@ func transferLikes(source, target *youtube.Service) error {
 		videoId := likedItems[i].VideoID
 		if alreadyTransferred.Contains(videoId) {
 			log.Printf("skipping %v (already liked)", videoId)
+			continue
+		}
+		if dryRun {
+			log.Printf("[dry-run] would like video %d/%d: %s", len(likedItems)-i, len(likedItems), videoId)
 			continue
 		}
 		err := target.Videos.Rate(videoId, "like").Do()
@@ -354,6 +366,10 @@ func createMonthlyPlaylists(source, target *youtube.Service) error {
 
 		targetPlaylistID, exists := existingPlaylists[title]
 		if !exists {
+			if dryRun {
+				log.Printf("[dry-run] would create playlist %q", title)
+				continue
+			}
 			pl, err := target.Playlists.Insert([]string{"snippet", "status"}, &youtube.Playlist{
 				Snippet: &youtube.PlaylistSnippet{Title: title},
 				Status:  &youtube.PlaylistStatus{PrivacyStatus: "private"},
@@ -376,6 +392,10 @@ func createMonthlyPlaylists(source, target *youtube.Service) error {
 		for _, item := range byMonth[k] {
 			if alreadyAdded.Contains(item.VideoID) {
 				log.Printf("skipping %s (already in %q)", item.VideoID, title)
+				continue
+			}
+			if dryRun {
+				log.Printf("[dry-run] would add %s to %q", item.VideoID, title)
 				continue
 			}
 			_, err := target.PlaylistItems.Insert([]string{"snippet"}, &youtube.PlaylistItem{
