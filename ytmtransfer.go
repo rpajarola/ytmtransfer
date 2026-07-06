@@ -25,6 +25,11 @@ type Config struct {
 	TargetConfig oauth2.Config
 }
 
+var (
+	enableTransferLikes          bool = false
+	enableCreateMonthlyPlaylists bool = true
+)
+
 func main() {
 	ctx := context.Background()
 
@@ -61,11 +66,20 @@ func main() {
 		log.Fatalf("Error creating target YouTube service: %v", err)
 	}
 
-	log.Print("Transfering Likes")
+	if enableTransferLikes {
+		log.Print("Transfering Likes")
 
-	// Transfer likes
-	if err := transferLikes(sourceService, targetService); err != nil {
-		log.Fatalf("Error transferring likes: %v", err)
+		// Transfer likes
+		if err := transferLikes(sourceService, targetService); err != nil {
+			log.Fatalf("Error transferring likes: %v", err)
+		}
+	}
+
+	if enableCreateMonthlyPlaylists {
+		log.Print("Creating monthly playlists from Liked Music")
+		if err := createMonthlyPlaylists(sourceService, targetService); err != nil {
+			log.Fatalf("Error creating monthly playlists: %v", err)
+		}
 	}
 }
 
@@ -124,7 +138,7 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 
 func saveToken(path string, token *oauth2.Token) {
 	fmt.Printf("Saving credential file to: %s\n", path)
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		log.Fatalf("Unable to cache oauth token: %v", err)
 	}
@@ -243,6 +257,171 @@ func isServerError(err error) bool {
 		return true
 	}
 	return false
+}
+
+type likedMusicItem struct {
+	VideoID     string
+	PublishedAt time.Time
+}
+
+type monthKey struct {
+	Year  int
+	Month time.Month
+}
+
+// listPlaylists returns a title→id map of all playlists owned by the account.
+func listPlaylists(s *youtube.Service) (map[string]string, error) {
+	result := make(map[string]string)
+	pageToken := ""
+	for {
+		call := s.Playlists.List([]string{"id", "snippet"}).Mine(true).MaxResults(50)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+		resp, err := call.Do()
+		if err != nil {
+			return nil, fmt.Errorf("error listing playlists: %v", err)
+		}
+		for _, pl := range resp.Items {
+			result[pl.Snippet.Title] = pl.Id
+		}
+		pageToken = resp.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	return result, nil
+}
+
+func getLikedMusicItems(s *youtube.Service) ([]likedMusicItem, error) {
+	// https://www.reddit.com/r/Lidarr/comments/1mugfon/sync_youtube_playlists_with_lidarr_using_youtubarr/
+	playlistID := "LM"
+	var items []likedMusicItem
+	pageToken := ""
+	for {
+		call := s.PlaylistItems.List([]string{"snippet"}).PlaylistId(playlistID).MaxResults(50)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+		resp, err := call.Do()
+		if err != nil {
+			return nil, fmt.Errorf("error fetching Liked Music items: %v", err)
+		}
+		for _, item := range resp.Items {
+			t, err := time.Parse(time.RFC3339, item.Snippet.PublishedAt)
+			if err != nil {
+				log.Printf("warning: could not parse publishedAt %q for %s: %v",
+					item.Snippet.PublishedAt, item.Snippet.ResourceId.VideoId, err)
+				continue
+			}
+			items = append(items, likedMusicItem{
+				VideoID:     item.Snippet.ResourceId.VideoId,
+				PublishedAt: t,
+			})
+		}
+		pageToken = resp.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	log.Printf("Found %d items in Liked Music playlist", len(items))
+	return items, nil
+}
+
+func getPlaylistVideoIDs(s *youtube.Service, playlistID string) ([]string, error) {
+	var ids []string
+	pageToken := ""
+	for {
+		call := s.PlaylistItems.List([]string{"snippet"}).PlaylistId(playlistID).MaxResults(50)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+		resp, err := call.Do()
+		if err != nil {
+			return nil, fmt.Errorf("error fetching playlist items for %s: %v", playlistID, err)
+		}
+		for _, item := range resp.Items {
+			ids = append(ids, item.Snippet.ResourceId.VideoId)
+		}
+		pageToken = resp.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	return ids, nil
+}
+
+func createMonthlyPlaylists(source, target *youtube.Service) error {
+	items, err := getLikedMusicItems(source)
+	if err != nil {
+		return err
+	}
+
+	// Group items by month, preserving first-occurrence order.
+	byMonth := make(map[monthKey][]likedMusicItem)
+	var orderedMonths []monthKey
+	seenMonths := make(map[monthKey]bool)
+	for _, item := range items {
+		k := monthKey{item.PublishedAt.Year(), item.PublishedAt.Month()}
+		if !seenMonths[k] {
+			orderedMonths = append(orderedMonths, k)
+			seenMonths[k] = true
+		}
+		byMonth[k] = append(byMonth[k], item)
+	}
+	log.Printf("Spreading %d items across %d monthly playlists", len(items), len(orderedMonths))
+
+	existingPlaylists, err := listPlaylists(target)
+	if err != nil {
+		return err
+	}
+
+	for _, k := range orderedMonths {
+		title := fmt.Sprintf("Liked Music %d-%02d", k.Year, int(k.Month))
+
+		targetPlaylistID, exists := existingPlaylists[title]
+		if !exists {
+			pl, err := target.Playlists.Insert([]string{"snippet", "status"}, &youtube.Playlist{
+				Snippet: &youtube.PlaylistSnippet{Title: title},
+				Status:  &youtube.PlaylistStatus{PrivacyStatus: "private"},
+			}).Do()
+			if err != nil {
+				return fmt.Errorf("error creating playlist %q: %v", title, err)
+			}
+			targetPlaylistID = pl.Id
+			log.Printf("Created playlist %q (%s)", title, targetPlaylistID)
+		} else {
+			log.Printf("Playlist %q already exists (%s)", title, targetPlaylistID)
+		}
+
+		existingIDs, err := getPlaylistVideoIDs(target, targetPlaylistID)
+		if err != nil {
+			return err
+		}
+		alreadyAdded := newStringSet(existingIDs...)
+
+		for _, item := range byMonth[k] {
+			if alreadyAdded.Contains(item.VideoID) {
+				log.Printf("skipping %s (already in %q)", item.VideoID, title)
+				continue
+			}
+			_, err := target.PlaylistItems.Insert([]string{"snippet"}, &youtube.PlaylistItem{
+				Snippet: &youtube.PlaylistItemSnippet{
+					PlaylistId: targetPlaylistID,
+					ResourceId: &youtube.ResourceId{
+						Kind:    "youtube#video",
+						VideoId: item.VideoID,
+					},
+				},
+			}).Do()
+			if err != nil {
+				log.Printf("Error adding %s to %q: %v", item.VideoID, title, err)
+				continue
+			}
+			log.Printf("Added %s to %q", item.VideoID, title)
+		}
+	}
+	return nil
 }
 
 // Helper to open browser automatically
