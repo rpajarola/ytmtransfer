@@ -34,6 +34,8 @@ var (
 
 func main() {
 	flag.BoolVar(&dryRun, "n", false, "dry-run: show what would be done without making any changes")
+	flag.BoolVar(&enableTransferLikes, "l", true, "transfer likes")
+	flag.BoolVar(&enableCreateMonthlyPlaylists, "m", true, "create monthly playlists of liked music")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -153,7 +155,6 @@ func saveToken(path string, token *oauth2.Token) {
 	defer f.Close()
 	json.NewEncoder(f).Encode(token)
 }
-
 
 type stringSet map[string]struct{}
 
