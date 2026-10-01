@@ -366,6 +366,7 @@ func createMonthlyPlaylists(source, target *youtube.Service) error {
 		title := fmt.Sprintf("Liked Music %d-%02d", k.Year, int(k.Month))
 
 		targetPlaylistID, exists := existingPlaylists[title]
+		alreadyAdded := newStringSet()
 		if !exists {
 			if dryRun {
 				log.Printf("[dry-run] would create playlist %q", title)
@@ -382,13 +383,12 @@ func createMonthlyPlaylists(source, target *youtube.Service) error {
 			log.Printf("Created playlist %q (%s)", title, targetPlaylistID)
 		} else {
 			log.Printf("Playlist %q already exists (%s)", title, targetPlaylistID)
+			existingIDs, err := getPlaylistVideoIDs(target, targetPlaylistID)
+			if err != nil {
+				return err
+			}
+			alreadyAdded = newStringSet(existingIDs...)
 		}
-
-		existingIDs, err := getPlaylistVideoIDs(target, targetPlaylistID)
-		if err != nil {
-			return err
-		}
-		alreadyAdded := newStringSet(existingIDs...)
 
 		for _, item := range byMonth[k] {
 			if alreadyAdded.Contains(item.VideoID) {
